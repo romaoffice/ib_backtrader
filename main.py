@@ -10,20 +10,20 @@ _test = False
 
 class IBapi(EWrapper, EClient):
     TICKER = "SOXL" 
-    SHOWEVERYTICK = 5
+    SHOWEVERYTICK = 3
     TIMEOFFSET_UTC = 0
     MAX_Stop_Orders_Per_Day=10
     MAX_Stop_Orders_Per_Hour=8
 
     START_OF_TRADING = datetime.time(16-TIMEOFFSET_UTC,30,0)
     END_OF_DAY = datetime.time(23-TIMEOFFSET_UTC,00,0)
-    Buy_Stop_Percent = 1
-    Sell_Limit=[1,2,3,4,5,6,7,8,9,10]
-    Sell_Limit_Amt=[0.1,0.1,0.1,0.1,0.1,  0.1,0.1,0.1,0.1,0.1];
-    Sell_Stop_Percent = 1
-    Buy_Limit=[1,2,3,4,5,6,7,8,9,10]
-    Buy_Limit_Amt= [0.1,0.1,0.1,0.1,0.1,  0.1,0.1,0.1,0.1,0.1];
-    USD_Quantity = [1000,1100,1200,1300,1400,1500,1600,1700,1800,1900]
+    Buy_Stop_Percent = 6
+    Sell_Limit=[0.5,1,1.5,2,2.5,3,3.5,4,4.5,5]
+    Sell_Limit_Amt=[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1];
+    Sell_Stop_Percent = 6
+    Buy_Limit=[0.5,1,1.5,2,2.5,3,3.5,4,4.5,5]
+    Buy_Limit_Amt= [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1];
+    USD_Quantity = [10000,10000,10000,10000,10000,10000,10000,10000,10000,10000]
 
     serverTime = None
     openPrice = None
@@ -35,6 +35,7 @@ class IBapi(EWrapper, EClient):
     
     MAX_Stop_Orders_Per_Day_Counter = 0
     MAX_Stop_Orders_Per_Hour_Counter =0
+    ReduceY = 0.1
     lastHour =0
 
     buy_stop_orderid = -1
@@ -44,15 +45,16 @@ class IBapi(EWrapper, EClient):
     sell_stop_level = 0
     nextOrderId = 1
 
-    tradeState = 0
+    tradeState = -2
     tradeDirection = 0
     stoplossId=0
     limiOrderIdList=[]
     tickCount = 0
+    stpamount = 0
     def __init__(self):
         EClient.__init__(self, self)
         self.contract = self.Stock_contract(self.TICKER)
-        self.tradeState = -1
+        self.tradeState = -2
 
         file_name = str(self.TICKER) + '-' + datetime.datetime.now().strftime("%d-%m_%H_%M_%S")
         self.save_logs_path = './logs' + '/' + file_name + '.txt'
@@ -88,6 +90,16 @@ class IBapi(EWrapper, EClient):
 
 
     def tickPrice(self, reqId, tickType, price, attrib):
+        if(self.timeInRange()==False):
+            print(f'Waiting market {self.START_OF_TRADING}/{datetime.datetime.now()}')
+            self.tradeState==-2
+            return;
+        else:
+            if self.tradeState==-2:
+                self.tradeState=-1
+                self.reqAllOpenOrders();
+                return;
+
         if tickType == 6:
             self.high = price
         if tickType == 7:
@@ -105,8 +117,6 @@ class IBapi(EWrapper, EClient):
                     pL = math.floor(10000*self.low/self.openPrice-10000)/100;
                 self.writeLog(f'\rTime:{self.START_OF_TRADING}/{datetime.datetime.now()} Open price:{self.openPrice} , Close:{self.price}[{pC}%],High:{self.high}[{pH}%],Low:{self.low}[{pL}%], Remain Lot:{self.remainLot} buy/sell level:{self.buy_stop_level}/{self.sell_stop_level}');
                 self.tickCount = 0
-            if(self.timeInRange()==False):
-                print(f'Waiting market {self.START_OF_TRADING}/{datetime.datetime.now()}')
             if(self.openPrice is not None and self.price is not None and self.tradeState==0): #meet open price
                 if(self.price<self.buy_stop_level and self.price>self.sell_stop_level):#meet price condition
                     if(self.timeInRange()==False):
@@ -116,14 +126,14 @@ class IBapi(EWrapper, EClient):
                         return;
                     self.nextOrderId = self.nextOrderId +1
                     self.buy_stop_orderid = self.nextOrderId;
+                    self.stpamount = self.USD_Quantity[math.floor(self.MAX_Stop_Orders_Per_Day_Counter)];
                     order = Order();
                     order.action = "BUY";
                     order.orderType = "STP";
                     order.auxPrice = self.buy_stop_level;
-                    order.totalQuantity = self.USD_Quantity[self.MAX_Stop_Orders_Per_Day_Counter]
-                    self.remainLot = order.totalQuantity
+                    order.totalQuantity = self.stpamount;
                     self.placeOrder(self.nextOrderId, self.contract, order)
-                    self.writeLog(f'Placed order orderId:{self.nextOrderId},action:{order.action},orderType:{order.orderType},qty:{order.totalQuantity},price:{order.auxPrice}')
+                    self.writeLog(f'Pending Buy {order.totalQuantity}@{order.auxPrice}:{self.nextOrderId}')
 
                     self.nextOrderId = self.nextOrderId +1
                     self.sell_stop_orderid = self.nextOrderId;
@@ -131,9 +141,9 @@ class IBapi(EWrapper, EClient):
                     order.action = "SELL";
                     order.orderType = "STP";
                     order.auxPrice = self.sell_stop_level;
-                    order.totalQuantity = self.USD_Quantity[self.MAX_Stop_Orders_Per_Day_Counter]
+                    order.totalQuantity = self.stpamount;
                     self.placeOrder(self.nextOrderId, self.contract, order)
-                    self.writeLog(f'Placed order orderId:{self.nextOrderId},action:{order.action},orderType:{order.orderType},qty:{order.totalQuantity},price:{order.auxPrice}')
+                    self.writeLog(f'Pending Sell {order.totalQuantity}@{order.auxPrice}:{self.nextOrderId}')
 
                     self.MAX_Stop_Orders_Per_Day_Counter = self.MAX_Stop_Orders_Per_Day_Counter + 1
                     self.MAX_Stop_Orders_Per_Hour_Counter = self.MAX_Stop_Orders_Per_Hour_Counter+1
@@ -155,17 +165,19 @@ class IBapi(EWrapper, EClient):
         self.nextOrderId = orderId
 
     def error(self, reqId, errorCode, errorString):
-        self.writeLog(f'"Error. Id: " , {reqId}, " Code: " , {errorCode} , " Msg: " , {errorString}')
+        if(errorCode<1000 or errorCode>3000):
+            self.writeLog(f'{errorString}')
 
     def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId,
                     whyHeld, mktCapPrice):
-        self.writeLog(f'OrderStatus. Id: , {orderId}, Status: , {status}, Filled: , {filled}, Remaining: , {remaining}, LastFillPrice:, {lastFillPrice}')
+        return;
+        #self.writeLog(f'OrderStatus. Id: , {orderId}, Status: , {status}, Filled: , {filled}, Remaining: , {remaining}, LastFillPrice:, {lastFillPrice}')
 
     def openOrder(self, orderId, contract, order, orderState):
-        self.writeLog(f'openOrder id:, {orderId}, {contract.symbol}, {contract.secType}, @, {contract.exchange}, :, {order.action},{order.orderType}, {order.totalQuantity}, {orderState.status}')
         if(self.tradeState==-1 and contract.symbol==self.contract.symbol):
             self.writeLog(f'Cancel order {orderId}, {contract.symbol}')
             self.cancelOrder(orderId)
+        #self.writeLog(f'openOrder id:, {orderId}, {contract.symbol}, {contract.secType}, @, {contract.exchange}, :, {order.action},{order.orderType}, {order.totalQuantity}, {orderState.status}')
 
     def openOrderEnd(self):
         super().openOrderEnd()
@@ -177,75 +189,84 @@ class IBapi(EWrapper, EClient):
         super().position(account, contract, position, avgCost)
         if(contract.symbol==self.contract.symbol and self.tradeState==-1):
             self.writeLog(f'Close Position. Account:{account} Symbol:{contract.symbol} SecType: {contract.secType} Currency:{contract.currency} Position:{position} Avg cost:{avgCost}')
-            order = Order()
-            order.orderType = "MKT";
-            if(position>0):
-                order.action = "SELL";
-                order.totalQuantity = position
-            else:
-                order.action = "BUY";
-                order.totalQuantity = -position
-            self.nextOrderId = self.nextOrderId +1
-            self.placeOrder(self.nextOrderId,self.contract,order)
+            if(position!=0.0):
+                order = Order()
+                order.orderType = "MKT";
+                if(position>0):
+                    order.action = "SELL";
+                    order.totalQuantity = position
+                else:
+                    order.action = "BUY";
+                    order.totalQuantity = -position
+                self.nextOrderId = self.nextOrderId +1
+                self.placeOrder(self.nextOrderId,self.contract,order)
 
     def positionEnd(self):
         super().positionEnd()
         if self.tradeState==-1:
-            self.reqMktData(1, self.contract, "", False, False, [])
             self.tradeState = 0
             self.writeLog("Completed to close all old position.")
 
     def execDetails(self, reqId, contract, execution):
-        self.writeLog(f'Order Executed: ,{ reqId}, {contract.symbol}, {contract.secType}, {contract.currency}, {execution.execId},{execution.orderId}, {execution.shares}, {execution.lastLiquidity}')
+        #print(execution)
+        #self.writeLog(f'Order Executed: ,{ reqId}, {contract.symbol}, {contract.secType}, {contract.currency}, {execution.execId},{execution.orderId}, {execution.shares}, {execution.lastLiquidity},{execution.cumQty}')
         
-        if(self.tradeState==1):
+        if(self.tradeState==1 and (execution.orderId == self.buy_stop_orderid or execution.orderId == self.sell_stop_orderid )):
+            if(execution.cumQty<self.stpamount):
+                return;
             batchOrder = [];
-            self.remainLot = execution.shares
+            self.remainLot = execution.cumQty;#execution.shares
             if(execution.orderId == self.buy_stop_orderid):
+                self.cancelOrder(self.sell_stop_orderid)
                 self.tradeDirection = 1
                 for i in range(len(self.Sell_Limit)):
                     order = Order()
                     order.action = "SELL";
                     order.orderType = "LMT";
-                    order.lmtPrice = math.floor(self.buy_stop_level*(1+self.Sell_Limit[i]/100)*100)/100;
+                    order.lmtPrice = math.floor(execution.avgPrice*(1+self.Sell_Limit[i]/100)*100)/100;
                     order.totalQuantity = math.floor(self.Sell_Limit_Amt[i]*self.remainLot)
                     batchOrder.append(order)
                 order = Order()
                 order.action = "SELL";
                 order.orderType = "STP";
                 order.auxPrice = self.openPrice;
-                order.totalQuantity = execution.shares
+                order.totalQuantity = self.remainLot
                 batchOrder.append(order)
             else:
                 self.tradeDirection = -1
+                self.cancelOrder(self.buy_stop_orderid)
                 for i in range(len(self.Buy_Limit)):
                     order = Order()
                     order.action = "BUY";
                     order.orderType = "LMT";
-                    order.lmtPrice = math.floor(self.sell_stop_level*(1-self.Buy_Limit[i]/100)*100)/100;
+                    order.lmtPrice = math.floor(execution.avgPrice*(1-self.Buy_Limit[i]/100)*100)/100;
                     order.totalQuantity = math.floor(self.Buy_Limit_Amt[i]*self.remainLot)
                     batchOrder.append(order)
                 order = Order()
                 order.action = "BUY";
                 order.orderType = "STP";
                 order.auxPrice = self.openPrice;
-                order.totalQuantity = execution.shares
+                order.totalQuantity = self.remainLot
                 batchOrder.append(order)
-            self.cancelOrder(self.sell_stop_orderid)
-            self.cancelOrder(self.buy_stop_orderid)
             for o in batchOrder:
                 self.nextOrderId = self.nextOrderId +1
                 self.placeOrder(self.nextOrderId, self.contract, o)
                 if(o.orderType=="LMT"):
-                    self.writeLog(f'Placed order orderId:{self.nextOrderId},action:{o.action},orderType:{o.orderType},qty:{o.totalQuantity},price:{o.lmtPrice}')
+                    self.writeLog(f'Pending {o.orderType} {o.totalQuantity}@{o.lmtPrice}:{self.nextOrderId}')
                     self.limiOrderIdList.append(self.nextOrderId)
                 else:
-                    self.writeLog(f'Placed order orderId:{self.nextOrderId},action:{o.action},orderType:{o.orderType},qty:{o.totalQuantity},price:{o.auxPrice}')
+                    self.writeLog(f'Pending {o.orderType} {o.totalQuantity}@{o.auxPrice}:{self.nextOrderId}')
                     self.stoplossId = self.nextOrderId
             self.tradeState = 2              
             self.writeLog('sent all limit orders')  
             return
         if(self.tradeState==2):
+            limitId = False
+            for orderId in self.limiOrderIdList:
+                if(orderId==execution.orderId):
+                    limitId = True
+            if(limitId==False):
+                return;
             if(execution.orderId==self.stoplossId):#got stop loss
                 for oId in self.limiOrderIdList:
                     self.cancelOrder(oId)
@@ -254,7 +275,12 @@ class IBapi(EWrapper, EClient):
                 self.writeLog('got stoploss,cancel all order and restart')  
 
             else:
-                self.limiOrderIdList.pop(0)
+                self.MAX_Stop_Orders_Per_Day_Counter = self.MAX_Stop_Orders_Per_Day_Counter-self.ReduceY
+                self.MAX_Stop_Orders_Per_Hour_Counter =self.MAX_Stop_Orders_Per_Hour_Counter-self.ReduceY
+                if(self.MAX_Stop_Orders_Per_Day_Counter<0):
+                    self.MAX_Stop_Orders_Per_Day_Counter = 0
+                if(self.MAX_Stop_Orders_Per_Hour_Counter<0):
+                    self.MAX_Stop_Orders_Per_Hour_Counter = 0
                 self.remainLot = self.remainLot-execution.shares
                 self.writeLog(f'got tp level lot:{execution.shares}')  
                 self.cancelOrder(self.stoplossId)
@@ -273,19 +299,19 @@ class IBapi(EWrapper, EClient):
                         order.action = "SELL";
                     else:                    
                         order.action = "BUY";
-                    self.writeLog(f'Placed order orderId:{self.nextOrderId},action:{order.action},orderType:{order.orderType},qty:{order.totalQuantity},price:{order.auxPrice}')
+                    self.writeLog(f'Pending {order.orderType} {order.totalQuantity}@{order.auxPrice}:{self.nextOrderId}')
                     self.placeOrder(self.nextOrderId, self.contract, order)
                     self.stoplossId = self.nextOrderId 
             return
 
     def start(self):
         print("Started.")
-        self.reqAllOpenOrders();
+        self.reqMktData(1, self.contract, "", False, False, [])
         return
     
 app = IBapi()
 app.connect('127.0.0.1', 7497, 123)
-#app.connect('95.168.191.114', 7497, 123)
+# app.connect('95.168.191.114', 7497, 123)
 app.start()
 app.run()
 
